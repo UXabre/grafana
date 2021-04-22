@@ -100,29 +100,6 @@ func TestMiddlewareContext(t *testing.T) {
 
 		assert.Equal(t, id, gotID)
 	})
-
-	t.Run("When the cache key contains additional headers", func(t *testing.T) {
-		const id int64 = 33
-		const group = "grafana-core-team"
-		const role = "Admin"
-
-		h, err := HashCacheKey(hdrName + "-" + group + "-" + role)
-		require.NoError(t, err)
-		key := fmt.Sprintf(CachePrefix, h)
-		err = cache.Set(context.Background(), key, id, 0)
-		require.NoError(t, err)
-
-		auth := prepareMiddleware(t, cache, func(req *http.Request, cfg *setting.Cfg) {
-			req.Header.Set("X-WEBAUTH-GROUPS", group)
-			req.Header.Set("X-WEBAUTH-ROLE", role)
-			cfg.AuthProxyHeaders = map[string]string{"Groups": "X-WEBAUTH-GROUPS", "Role": "X-WEBAUTH-ROLE"}
-		})
-		assert.Equal(t, "auth-proxy-sync-ttl:f5acfffd56daac98d502ef8c8b8c5d56", key)
-
-		gotID, err := auth.Login(logger, false)
-		require.NoError(t, err)
-		assert.Equal(t, id, gotID)
-	})
 }
 
 func TestMiddlewareContext_ldap(t *testing.T) {

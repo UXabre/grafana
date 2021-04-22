@@ -349,8 +349,6 @@ func TestMiddlewareContext(t *testing.T) {
 	t.Run("auth_proxy", func(t *testing.T) {
 		const userID int64 = 33
 		const orgID int64 = 4
-		const defaultOrgId int64 = 1
-		const orgRole = "Admin"
 
 		configure := func(cfg *setting.Cfg) {
 			cfg.AuthProxyEnabled = true
@@ -358,11 +356,12 @@ func TestMiddlewareContext(t *testing.T) {
 			cfg.LDAPEnabled = true
 			cfg.AuthProxyHeaderName = "X-WEBAUTH-USER"
 			cfg.AuthProxyHeaderProperty = "username"
-			cfg.AuthProxyHeaders = map[string]string{"Groups": "X-WEBAUTH-GROUPS", "Role": "X-WEBAUTH-ROLE"}
+			cfg.AuthProxyHeaders = map[string]string{"Groups": "X-WEBAUTH-GROUPS", "Orgs": "X-WEBAUTH-ORGS"}
 		}
 
 		const hdrName = "markelog"
 		const group = "grafana-core-team"
+		const orgs = "1:Admin,2"
 
 		middlewareScenario(t, "Should not sync the user if it's in the cache", func(t *testing.T, sc *scenarioContext) {
 			bus.AddHandler("test", func(ctx context.Context, query *models.GetSignedInUserQuery) error {
@@ -407,6 +406,37 @@ func TestMiddlewareContext(t *testing.T) {
 			cfg.AuthProxyAutoSignUp = false
 		})
 
+		middlewareScenario(t, "Should create an user from headers and assign organizations", func(t *testing.T, sc *scenarioContext) {
+			var orgRoles = map[int64]models.RoleType{}
+			bus.AddHandler("test", func(ctx context.Context, query *models.GetSignedInUserQuery) error {
+				if query.UserId > 0 {
+					query.Result = &models.SignedInUser{OrgId: query.OrgId, UserId: userID}
+					return nil
+				}
+				return models.ErrUserNotFound
+			})
+
+			bus.AddHandler("test", func(ctx context.Context, cmd *models.UpsertUserCommand) error {
+				orgRoles = cmd.ExternalUser.OrgRoles
+				cmd.Result = &models.User{Id: userID}
+				return nil
+			})
+
+			sc.fakeReq("GET", "/")
+			sc.req.Header.Set(sc.cfg.AuthProxyHeaderName, hdrName)
+			sc.req.Header.Set("X-WEBAUTH-ORGS", orgs)
+			sc.exec()
+
+			assert.True(t, sc.context.IsSignedIn)
+			assert.Equal(t, map[int64]models.RoleType{1: models.ROLE_ADMIN, 2: models.ROLE_VIEWER}, orgRoles)
+			assert.Equal(t, userID, sc.context.UserId)
+			assert.Equal(t, int64(1), sc.context.OrgId)
+		}, func(cfg *setting.Cfg) {
+			configure(cfg)
+			cfg.LDAPEnabled = false
+			cfg.AuthProxyAutoSignUp = true
+		})
+
 		middlewareScenario(t, "Should create an user from a header", func(t *testing.T, sc *scenarioContext) {
 			bus.AddHandler("test", func(ctx context.Context, query *models.GetSignedInUserQuery) error {
 				if query.UserId > 0 {
@@ -428,71 +458,6 @@ func TestMiddlewareContext(t *testing.T) {
 			assert.True(t, sc.context.IsSignedIn)
 			assert.Equal(t, userID, sc.context.UserId)
 			assert.Equal(t, orgID, sc.context.OrgId)
-		}, func(cfg *setting.Cfg) {
-			configure(cfg)
-			cfg.LDAPEnabled = false
-			cfg.AuthProxyAutoSignUp = true
-		})
-
-		middlewareScenario(t, "Should assign role from header to default org", func(t *testing.T, sc *scenarioContext) {
-			var storedRoleInfo map[int64]models.RoleType = nil
-			bus.AddHandler("test", func(ctx context.Context, query *models.GetSignedInUserQuery) error {
-				if query.UserId > 0 {
-					query.Result = &models.SignedInUser{OrgId: defaultOrgId, UserId: userID, OrgRole: storedRoleInfo[defaultOrgId]}
-					return nil
-				}
-				return models.ErrUserNotFound
-			})
-
-			bus.AddHandler("test", func(ctx context.Context, cmd *models.UpsertUserCommand) error {
-				cmd.Result = &models.User{Id: userID}
-				storedRoleInfo = cmd.ExternalUser.OrgRoles
-				return nil
-			})
-
-			sc.fakeReq("GET", "/")
-			sc.req.Header.Set(sc.cfg.AuthProxyHeaderName, hdrName)
-			sc.req.Header.Set("X-WEBAUTH-ROLE", orgRole)
-			sc.exec()
-
-			assert.True(t, sc.context.IsSignedIn)
-			assert.Equal(t, userID, sc.context.UserId)
-			assert.Equal(t, defaultOrgId, sc.context.OrgId)
-			assert.Equal(t, orgRole, string(sc.context.OrgRole))
-		}, func(cfg *setting.Cfg) {
-			configure(cfg)
-			cfg.LDAPEnabled = false
-			cfg.AuthProxyAutoSignUp = true
-		})
-
-		middlewareScenario(t, "Should NOT assign role from header to non-default org", func(t *testing.T, sc *scenarioContext) {
-			var storedRoleInfo map[int64]models.RoleType = nil
-			bus.AddHandler("test", func(ctx context.Context, query *models.GetSignedInUserQuery) error {
-				if query.UserId > 0 {
-					query.Result = &models.SignedInUser{OrgId: orgID, UserId: userID, OrgRole: storedRoleInfo[orgID]}
-					return nil
-				}
-				return models.ErrUserNotFound
-			})
-
-			bus.AddHandler("test", func(ctx context.Context, cmd *models.UpsertUserCommand) error {
-				cmd.Result = &models.User{Id: userID}
-				storedRoleInfo = cmd.ExternalUser.OrgRoles
-				return nil
-			})
-
-			sc.fakeReq("GET", "/")
-			sc.req.Header.Set(sc.cfg.AuthProxyHeaderName, hdrName)
-			sc.req.Header.Set("X-WEBAUTH-ROLE", "Admin")
-			sc.req.Header.Set("X-Grafana-Org-Id", strconv.FormatInt(orgID, 10))
-			sc.exec()
-
-			assert.True(t, sc.context.IsSignedIn)
-			assert.Equal(t, userID, sc.context.UserId)
-			assert.Equal(t, orgID, sc.context.OrgId)
-
-			// For non-default org, the user role should be empty
-			assert.Equal(t, "", string(sc.context.OrgRole))
 		}, func(cfg *setting.Cfg) {
 			configure(cfg)
 			cfg.LDAPEnabled = false
