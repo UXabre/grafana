@@ -11,13 +11,14 @@ COPY plugins-bundled plugins-bundled
 
 RUN yarn install
 
-COPY tsconfig.json .eslintrc .editorconfig .browserslistrc .prettierrc.js babel.config.json ./
+COPY tsconfig.json .eslintrc .editorconfig .browserslistrc .prettierrc.js babel.config.json .linguirc ./
 COPY public public
 COPY tools tools
 COPY scripts scripts
 COPY emails emails
 
 ENV NODE_ENV production
+RUN yarn run lingui compile
 RUN yarn build
 
 FROM golang:1.17.6-alpine3.15 as go-builder
